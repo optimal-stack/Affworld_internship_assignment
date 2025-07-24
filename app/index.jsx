@@ -1,18 +1,3 @@
-/**
- * My Tasks - React Native Mobile Application (Web-Optimized)
- * 
- * A comprehensive task management app with local notifications,
- * data persistence, and priority-based organization.
- * 
- * Features:
- * - Task CRUD operations
- * - Priority-based notifications
- * - Data persistence with AsyncStorage/localStorage
- * - Modern UI with animations
- * - Task filtering and sorting
- * - Web-optimized interactions
- */
-
 import React, { useState, useEffect } from "react";
 import {
   View,
