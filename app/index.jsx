@@ -1,5 +1,5 @@
 /**
- * My Tasks - React Native Mobile Application
+ * My Tasks - React Native Mobile Application (Web-Optimized)
  * 
  * A comprehensive task management app with local notifications,
  * data persistence, and priority-based organization.
@@ -7,9 +7,10 @@
  * Features:
  * - Task CRUD operations
  * - Priority-based notifications
- * - Data persistence with AsyncStorage
+ * - Data persistence with AsyncStorage/localStorage
  * - Modern UI with animations
  * - Task filtering and sorting
+ * - Web-optimized interactions
  */
 
 import React, { useState, useEffect } from "react";
@@ -25,6 +26,7 @@ import {
   StatusBar,
   Modal,
   Animated,
+  Platform,
 } from "react-native";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from "expo-notifications";
@@ -35,6 +37,7 @@ import { Ionicons } from "@expo/vector-icons";
 // ===========================
 
 const STORAGE_KEY = 'myTasks';
+const IS_WEB = Platform.OS === 'web';
 
 const PRIORITY_CONFIG = {
   high: {
@@ -61,7 +64,7 @@ const PRIORITY_CONFIG = {
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
-    shouldPlaySound: true,
+    shouldPlaySound: !IS_WEB, // No sound on web
     shouldSetBadge: false,
   }),
 });
@@ -85,6 +88,10 @@ export default function App() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editTaskText, setEditTaskText] = useState("");
   
+  // Delete confirmation modal state
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [taskToDelete, setTaskToDelete] = useState(null);
+  
   // Animation
   const [fadeAnim] = useState(new Animated.Value(0));
 
@@ -101,7 +108,9 @@ export default function App() {
   }, [tasks]);
 
   const initializeApp = async () => {
-    await requestNotificationPermissions();
+    if (!IS_WEB) {
+      await requestNotificationPermissions();
+    }
     await loadTasks();
     startFadeInAnimation();
   };
@@ -134,6 +143,26 @@ export default function App() {
   };
 
   // ===========================
+  // WEB-OPTIMIZED ALERT SYSTEM
+  // ===========================
+
+  const showAlert = (title, message, buttons = [{ text: "OK" }]) => {
+    if (IS_WEB) {
+      // Use custom modal for web instead of native Alert
+      if (buttons.length > 1) {
+        // For confirmation dialogs, we'll use our custom modal
+        return Promise.resolve();
+      } else {
+        // For simple alerts, use browser alert
+        alert(`${title}\n\n${message}`);
+        return Promise.resolve();
+      }
+    } else {
+      Alert.alert(title, message, buttons);
+    }
+  };
+
+  // ===========================
   // DATA PERSISTENCE
   // ===========================
 
@@ -147,7 +176,7 @@ export default function App() {
       }
     } catch (error) {
       console.error('Error loading tasks:', error);
-      Alert.alert('Storage Error', 'Failed to load saved tasks.');
+      showAlert('Storage Error', 'Failed to load saved tasks.');
     }
   };
 
@@ -166,14 +195,27 @@ export default function App() {
   const addTask = async () => {
     // Validation
     if (taskInput.trim() === "") {
-      Alert.alert("Invalid Input", "Please enter a task description.");
+      showAlert("Invalid Input", "Please enter a task description.");
       return;
     }
 
     const newTask = createNewTask();
     
     try {
-      const notificationId = await scheduleTaskNotification(newTask);
+      let notificationId = null;
+      
+      // Only schedule notifications on mobile or if browser supports it
+      if (!IS_WEB) {
+        notificationId = await scheduleTaskNotification(newTask);
+      } else {
+        // For web, try browser notifications
+        try {
+          notificationId = await scheduleBrowserNotification(newTask);
+        } catch (error) {
+          console.log('Browser notifications not supported:', error);
+        }
+      }
+      
       newTask.notificationId = notificationId;
       
       setTasks(prevTasks => [newTask, ...prevTasks]);
@@ -211,6 +253,23 @@ export default function App() {
     });
   };
 
+  const scheduleBrowserNotification = async (task) => {
+    if ('Notification' in window) {
+      const permission = await Notification.requestPermission();
+      if (permission === 'granted') {
+        const priorityConfig = PRIORITY_CONFIG[task.priority];
+        setTimeout(() => {
+          new Notification(`${priorityConfig.label} Priority Task! 📝`, {
+            body: `Time to complete: ${task.text}`,
+            icon: '/favicon.ico', // You can add an icon
+          });
+        }, priorityConfig.notificationDelay * 1000);
+        return 'browser-notification';
+      }
+    }
+    return null;
+  };
+
   const resetInputForm = () => {
     setTaskInput("");
     setSelectedPriority('medium');
@@ -218,11 +277,11 @@ export default function App() {
 
   const showTaskAddedConfirmation = (priority) => {
     const delay = PRIORITY_CONFIG[priority].notificationDelay;
-    Alert.alert(
-      "Task Added Successfully!", 
-      `You'll receive a reminder in ${delay} seconds.`,
-      [{ text: "OK" }]
-    );
+    const message = IS_WEB 
+      ? `Task added! ${delay < 60 ? delay + ' seconds' : Math.floor(delay/60) + ' minutes'} reminder set.`
+      : `You'll receive a reminder in ${delay} seconds.`;
+    
+    showAlert("Task Added Successfully!", message);
   };
 
   const toggleTaskCompletion = async (taskId) => {
@@ -245,25 +304,55 @@ export default function App() {
 
   const cancelTaskNotification = async (notificationId) => {
     try {
-      await Notifications.cancelScheduledNotificationAsync(notificationId);
+      if (!IS_WEB && notificationId !== 'browser-notification') {
+        await Notifications.cancelScheduledNotificationAsync(notificationId);
+      }
+      // For browser notifications, we can't cancel them once scheduled
     } catch (error) {
       console.warn("Error cancelling notification:", error);
     }
   };
 
+  // ===========================
+  // WEB-OPTIMIZED DELETE FUNCTIONALITY
+  // ===========================
+
   const deleteTask = (taskId) => {
-    Alert.alert(
-      "Delete Task",
-      "Are you sure you want to delete this task?",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive",
-          onPress: () => performTaskDeletion(taskId)
-        }
-      ]
-    );
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    if (IS_WEB) {
+      // Use custom modal for web
+      setTaskToDelete(task);
+      setDeleteModalVisible(true);
+    } else {
+      // Use native Alert for mobile
+      Alert.alert(
+        "Delete Task",
+        "Are you sure you want to delete this task?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { 
+            text: "Delete", 
+            style: "destructive",
+            onPress: () => performTaskDeletion(taskId)
+          }
+        ]
+      );
+    }
+  };
+
+  const confirmDelete = () => {
+    if (taskToDelete) {
+      performTaskDeletion(taskToDelete.id);
+    }
+    setDeleteModalVisible(false);
+    setTaskToDelete(null);
+  };
+
+  const cancelDelete = () => {
+    setDeleteModalVisible(false);
+    setTaskToDelete(null);
   };
 
   const performTaskDeletion = async (taskId) => {
@@ -289,7 +378,7 @@ export default function App() {
 
   const saveEditedTask = () => {
     if (editTaskText.trim() === "") {
-      Alert.alert("Invalid Input", "Task description cannot be empty.");
+      showAlert("Invalid Input", "Task description cannot be empty.");
       return;
     }
 
@@ -470,7 +559,7 @@ export default function App() {
 
         <View style={styles.taskActions}>
           <TouchableOpacity
-            style={styles.editButton}
+            style={[styles.editButton, IS_WEB && styles.webOptimizedButton]}
             onPress={() => editTask(item)}
             accessibilityLabel="Edit task"
           >
@@ -478,7 +567,7 @@ export default function App() {
           </TouchableOpacity>
           
           <TouchableOpacity
-            style={styles.deleteButton}
+            style={[styles.deleteButton, IS_WEB && styles.webOptimizedButton]}
             onPress={() => deleteTask(item.id)}
             accessibilityLabel="Delete task"
           >
@@ -546,6 +635,47 @@ export default function App() {
     </Modal>
   );
 
+  const renderDeleteModal = () => (
+    <Modal
+      visible={deleteModalVisible}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={cancelDelete}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <Text style={styles.modalTitle}>Delete Task</Text>
+          
+          <Text style={styles.deleteModalText}>
+            Are you sure you want to delete this task?
+          </Text>
+          
+          {taskToDelete && (
+            <Text style={styles.deleteModalTaskText}>
+              "{taskToDelete.text}"
+            </Text>
+          )}
+          
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={[styles.modalButton, styles.cancelButton]}
+              onPress={cancelDelete}
+            >
+              <Text style={styles.cancelButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.modalButton, styles.deleteConfirmButton]}
+              onPress={confirmDelete}
+            >
+              <Text style={styles.deleteButtonText}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+
   // ===========================
   // MAIN RENDER
   // ===========================
@@ -562,6 +692,7 @@ export default function App() {
         <Text style={styles.headerTitle}>My Tasks</Text>
         <Text style={styles.headerSubtitle}>
           {incomplete} pending • {completed} completed
+          {IS_WEB && <Text style={styles.webIndicator}> • Web Version</Text>}
         </Text>
       </View>
 
@@ -584,6 +715,7 @@ export default function App() {
             style={[
               styles.addButton,
               taskInput.trim() === "" && styles.addButtonDisabled,
+              IS_WEB && styles.webOptimizedButton,
             ]}
             onPress={addTask}
             disabled={taskInput.trim() === ""}
@@ -612,6 +744,9 @@ export default function App() {
 
       {/* Edit Task Modal */}
       {renderEditModal()}
+
+      {/* Delete Confirmation Modal */}
+      {renderDeleteModal()}
     </SafeAreaView>
   );
 }
@@ -641,6 +776,10 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: "#6c757d",
+  },
+  webIndicator: {
+    color: "#007bff",
+    fontWeight: "500",
   },
   filterContainer: {
     flexDirection: 'row',
@@ -707,6 +846,11 @@ const styles = StyleSheet.create({
   },
   addButtonDisabled: {
     backgroundColor: "#adb5bd",
+  },
+  webOptimizedButton: {
+    minWidth: 44,
+    minHeight: 44,
+    cursor: 'pointer',
   },
   priorityContainer: {
     flexDirection: 'row',
@@ -804,10 +948,18 @@ const styles = StyleSheet.create({
   editButton: {
     padding: 8,
     marginLeft: 8,
+    minWidth: 32,
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   deleteButton: {
     padding: 8,
     marginLeft: 4,
+    minWidth: 32,
+    minHeight: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   emptyState: {
     flex: 1,
@@ -856,6 +1008,20 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     marginBottom: 20,
   },
+  deleteModalText: {
+    fontSize: 16,
+    color: '#6c757d',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  deleteModalTaskText: {
+    fontSize: 14,
+    color: '#212529',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: 20,
+    paddingHorizontal: 10,
+  },
   modalButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -865,13 +1031,20 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     alignItems: 'center',
+    minHeight: 44, // Better touch target for web
   },
   cancelButton: {
     backgroundColor: '#f8f9fa',
     marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#dee2e6',
   },
   saveButton: {
     backgroundColor: '#007bff',
+    marginLeft: 10,
+  },
+  deleteConfirmButton: {
+    backgroundColor: '#dc3545',
     marginLeft: 10,
   },
   cancelButtonText: {
@@ -879,6 +1052,10 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   saveButtonText: {
+    color: '#fff',
+    fontWeight: '500',
+  },
+  deleteButtonText: {
     color: '#fff',
     fontWeight: '500',
   },
